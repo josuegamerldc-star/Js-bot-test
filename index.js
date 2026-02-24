@@ -16,19 +16,17 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-let activeUser = null;
-let transferredUsers = new Set();
+let activeChats = new Map(); // userId -> true
 
 client.on("ready", () => {
-  console.log(`✅ Bot online: ${client.user.tag}`);
+  console.log(`Bot online: ${client.user.tag}`);
 });
 
 
 // =====================
-// ATUALIZAR GITHUB GIST
+// GITHUB
 // =====================
 async function updateGist(texto) {
-
   await axios.patch(
     `https://api.github.com/gists/${GIST_ID}`,
     {
@@ -44,65 +42,76 @@ async function updateGist(texto) {
       }
     }
   );
-
 }
 
 
 // =====================
-// IA GROQ
+// IA
 // =====================
 async function aiChat(texto) {
 
-  try {
+  const res = await fetch(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${GROQ_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          {
+            role: "system",
+            content: `
+Você é um BOT DE SUPORTE do Discord.
 
-    const res = await fetch(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${GROQ_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
-          messages: [
-            {
-              role: "system",
-              content: `
-Você é um bot de suporte do Discord.
+REGRAS OBRIGATÓRIAS:
 
-REGRAS:
-- Converse normalmente com o usuário.
-- Seja amigável.
-- Se a pessoa precisar de ajuda real ou suporte humano,
-termine a resposta com: [TRANSFERIR]
+- Seja formal e educado.
+- Não faça piadas.
+- Não fale sobre amizade.
+- Não fale sobre sentimentos.
+- Não fale coisas pessoais.
+- Não use emojis.
+- Não diga que é uma IA avançada.
+- Não peça para mencionar administradores.
+- Você é o próprio sistema de suporte.
+
+OBJETIVO:
+
+- Ajudar o usuário com dúvidas.
+- Resolver problemas simples.
+- Se o usuário pedir administrador, suporte humano, moderador ou ajuda real,
+responda normalmente e no FINAL escreva: [TRANSFERIR]
+
+EXEMPLOS DE TRANSFERÊNCIA:
+
+"quero falar com adm"
+"preciso de ajuda de verdade"
+"quero suporte humano"
+"me passa um moderador"
+
+Quando não precisar transferir, NÃO escreva [TRANSFERIR].
 `
-            },
-            {
-              role: "user",
-              content: texto
-            }
-          ]
-        })
-      }
-    );
+          },
+          {
+            role: "user",
+            content: texto
+          }
+        ]
+      })
+    }
+  );
 
-    const data = await res.json();
+  const data = await res.json();
 
-    return data.choices[0].message.content;
-
-  } catch (err) {
-
-    console.error(err);
-    return "❌ Erro na IA.";
-
-  }
-
+  return data.choices[0].message.content;
 }
 
 
 // =====================
-// EVENTO MENSAGEM
+// MENSAGEM
 // =====================
 client.on("messageCreate", async (message) => {
 
@@ -112,15 +121,15 @@ client.on("messageCreate", async (message) => {
   const content = message.content;
 
 
-  // =======================
-  // /set  (mudar github)
-  // =======================
+  // =====================
+  // /set
+  // =====================
   if (content.startsWith("/set ")) {
 
     const texto = content.slice(5);
 
     await message.reply(
-      "✅ Pedido feito, seu texto (talvez) aparecerá em breve."
+      "Pedido feito, seu texto aparecera em breve."
     );
 
     try {
@@ -128,88 +137,84 @@ client.on("messageCreate", async (message) => {
       await updateGist(texto);
 
       setTimeout(() => {
-        message.reply("✅ Texto apareceu com sucesso!");
-      }, 5000);
+        message.reply("Texto alterado com sucesso.");
+      }, 4000);
 
     } catch {
 
-      await message.reply("❌ Erro ao mudar texto.");
+      await message.reply("Erro ao alterar texto.");
 
     }
 
     return;
-
   }
 
 
-  // =======================
-  // ADMIN RESPONDENDO
-  // =======================
+  // =====================
+  // ADMIN RESPONDE
+  // =====================
   if (message.author.id === ADMIN_ID && content.startsWith("/ms ")) {
 
     const texto = content.slice(4);
 
-    if (!activeUser) {
-      return message.reply("❌ Nenhum usuário em atendimento.");
+    const userId = [...activeChats.keys()][0];
+
+    if (!userId) {
+      return message.reply("Nenhum usuario em atendimento.");
     }
 
-    const user = await client.users.fetch(activeUser);
+    const user = await client.users.fetch(userId);
 
-    await user.send(`📨 Suporte:\n${texto}`);
-
-    await message.reply("✅ Mensagem enviada!");
+    await user.send(texto);
 
     return;
   }
 
 
-  // =======================
-  // USUÁRIO EM ATENDIMENTO
-  // =======================
-  if (transferredUsers.has(message.author.id)) {
+  // =====================
+  // USUARIO EM CHAT
+  // =====================
+  if (activeChats.has(message.author.id)) {
 
     const admin = await client.users.fetch(ADMIN_ID);
 
-    await admin.send(
-      `📩 ${message.author.tag}: ${content}`
-    );
+    await admin.send(content);
 
     return;
   }
 
 
-  // =======================
-  // IA CONVERSA
-  // =======================
+  // =====================
+  // IA
+  // =====================
   const reply = await aiChat(content);
 
   const transfer = reply.includes("[TRANSFERIR]");
 
-  const cleanReply = reply.replace("[TRANSFERIR]", "");
+  const clean = reply.replace("[TRANSFERIR]", "");
 
-  await message.reply(cleanReply);
+  await message.reply(clean);
 
 
-  // =======================
-  // TRANSFERIR PRO ADMIN
-  // =======================
+  // =====================
+  // TRANSFERIR
+  // =====================
   if (transfer) {
 
-    activeUser = message.author.id;
-    transferredUsers.add(message.author.id);
+    activeChats.set(message.author.id, true);
 
     const admin = await client.users.fetch(ADMIN_ID);
 
+    await message.reply(
+      "Vou transferir você para o ADMINISTRADOR, a partir de agora você está falando com o administrador. Para enviar uma mensagem, comece com /ms"
+    );
+
     await admin.send(
-      `🚨 Atendimento iniciado\nUsuário: ${message.author.tag}\nMensagem: ${content}`
+      `-----a partir de agora você está em um CHAT com ${message.author.tag}-----`
     );
 
   }
 
 });
 
-
-// =====================
-// LOGIN
-// =====================
 client.login(TOKEN);

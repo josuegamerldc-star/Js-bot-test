@@ -4,6 +4,7 @@ const fetch = require("node-fetch");
 
 const TOKEN = process.env.TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GIST_ID = process.env.GIST_ID;
 const GROQ_KEY = process.env.GROQ_KEY;
 const ADMIN_ID = process.env.ADMIN_ID;
 
@@ -18,19 +19,21 @@ const client = new Client({
 let activeUser = null;
 let transferredUsers = new Set();
 
-client.on("clientReady", () => {
-  console.log(`Bot online: ${client.user.tag}`);
+client.on("ready", () => {
+  console.log(`✅ Bot online: ${client.user.tag}`);
 });
+
 
 // =====================
 // ATUALIZAR GITHUB GIST
 // =====================
 async function updateGist(texto) {
+
   await axios.patch(
     `https://api.github.com/gists/${GIST_ID}`,
     {
       files: {
-        "gistfile1.txt": {
+        "mensagem.txt": {
           content: texto
         }
       }
@@ -41,47 +44,66 @@ async function updateGist(texto) {
       }
     }
   );
+
 }
 
+
 // =====================
-// IA GROQ DECISÃO
+// IA GROQ
 // =====================
-async function aiDecision(texto) {
+async function aiChat(texto) {
+
   try {
 
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GROQ_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Você é um BOT do discord, não fale sobre informações pessoais, haja como um bot-suporte, ajude os membros seja oque for,"
-          },
-          {
-            role: "user",
-            content: texto
-          }
-        ]
-      })
-    });
+    const res = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${GROQ_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [
+            {
+              role: "system",
+              content: `
+Você é um bot de suporte do Discord.
+
+REGRAS:
+- Converse normalmente com o usuário.
+- Seja amigável.
+- Se a pessoa precisar de ajuda real ou suporte humano,
+termine a resposta com: [TRANSFERIR]
+`
+            },
+            {
+              role: "user",
+              content: texto
+            }
+          ]
+        })
+      }
+    );
 
     const data = await res.json();
-    const reply = data.choices[0].message.content.toUpperCase();
 
-    return reply.includes("SIM");
+    return data.choices[0].message.content;
 
   } catch (err) {
-    console.error("Erro IA:", err);
-    return true;
+
+    console.error(err);
+    return "❌ Erro na IA.";
+
   }
+
 }
 
+
+// =====================
+// EVENTO MENSAGEM
+// =====================
 client.on("messageCreate", async (message) => {
 
   if (message.author.bot) return;
@@ -89,97 +111,105 @@ client.on("messageCreate", async (message) => {
 
   const content = message.content;
 
+
   // =======================
-  // COMANDO /set
+  // /set  (mudar github)
   // =======================
   if (content.startsWith("/set ")) {
 
     const texto = content.slice(5);
 
-    await message.reply("✅ Pedido feito, sua mensagem irá aparecerá em breve");
+    await message.reply(
+      "✅ Pedido feito, seu texto (talvez) aparecerá em breve."
+    );
 
     try {
+
       await updateGist(texto);
-      await message.reply("✅ texto mudado com sucesso!");
+
+      setTimeout(() => {
+        message.reply("✅ Texto apareceu com sucesso!");
+      }, 5000);
+
     } catch {
+
       await message.reply("❌ Erro ao mudar texto.");
+
     }
+
+    return;
+
+  }
+
+
+  // =======================
+  // ADMIN RESPONDENDO
+  // =======================
+  if (message.author.id === ADMIN_ID && content.startsWith("/ms ")) {
+
+    const texto = content.slice(4);
+
+    if (!activeUser) {
+      return message.reply("❌ Nenhum usuário em atendimento.");
+    }
+
+    const user = await client.users.fetch(activeUser);
+
+    await user.send(`📨 Suporte:\n${texto}`);
+
+    await message.reply("✅ Mensagem enviada!");
 
     return;
   }
 
+
   // =======================
-  // COMANDO /ms
+  // USUÁRIO EM ATENDIMENTO
   // =======================
-  if (!content.startsWith("/ms ")) return;
+  if (transferredUsers.has(message.author.id)) {
 
-  const texto = content.slice(4);
+    const admin = await client.users.fetch(ADMIN_ID);
 
-  try {
+    await admin.send(
+      `📩 ${message.author.tag}: ${content}`
+    );
 
-    // =======================
-    // ADMIN RESPONDENDO
-    // =======================
-    if (message.author.id === ADMIN_ID) {
+    return;
+  }
 
-      if (!activeUser) {
-        return message.reply("❌ Nenhum usuário em atendimento.");
-      }
 
-      const user = await client.users.fetch(activeUser);
-      await user.send(`📨 Suporte:\n${texto}`);
+  // =======================
+  // IA CONVERSA
+  // =======================
+  const reply = await aiChat(content);
 
-      await message.reply("✅ Mensagem enviada ao usuário!");
-      return;
-    }
+  const transfer = reply.includes("[TRANSFERIR]");
 
-    // =======================
-    // USUÁRIO JÁ TRANSFERIDO
-    // =======================
-    if (transferredUsers.has(message.author.id)) {
+  const cleanReply = reply.replace("[TRANSFERIR]", "");
 
-      const admin = await client.users.fetch(ADMIN_ID);
+  await message.reply(cleanReply);
 
-      await admin.send(
-        `📩 ${message.author.tag}: ${texto}`
-      );
 
-      return;
-    }
+  // =======================
+  // TRANSFERIR PRO ADMIN
+  // =======================
+  if (transfer) {
 
-    // =======================
-    // IA ANALISANDO
-    // =======================
-    const important = await aiDecision(texto);
+    activeUser = message.author.id;
+    transferredUsers.add(message.author.id);
 
-    if (important) {
+    const admin = await client.users.fetch(ADMIN_ID);
 
-      activeUser = message.author.id;
-      transferredUsers.add(message.author.id);
+    await admin.send(
+      `🚨 Atendimento iniciado\nUsuário: ${message.author.tag}\nMensagem: ${content}`
+    );
 
-      const admin = await client.users.fetch(ADMIN_ID);
-
-      await admin.send(
-        `🚨 Atendimento transferido\nUsuário: ${message.author.tag}\nMensagem: ${texto}`
-      );
-
-      await message.reply(
-        "✅ Sua conversa agora foi transferida para um administrador."
-      );
-
-    } else {
-
-      await message.reply(
-        "🤖 IA: Sua mensagem foi recebida! Parece algo simples 😊"
-      );
-
-    }
-
-  } catch (err) {
-    console.error(err);
-    await message.reply("❌ Erro.");
   }
 
 });
 
+
+// =====================
+// LOGIN
+// =====================
 client.login(TOKEN);

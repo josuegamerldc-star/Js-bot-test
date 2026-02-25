@@ -17,12 +17,18 @@ const client = new Client({
 });
 
 
-// =====================
-// SISTEMAS
-// =====================
+// =============================
+// SISTEMA DE CHAT
+// =============================
 
-let activeChats = new Map(); // userId -> true
-let chatMemory = new Map(); // userId -> mensagens IA
+// Usuário atualmente em atendimento humano
+let currentUserId = null;
+
+// Memória da IA por usuário
+let chatMemory = new Map();
+
+// Controle para oferecer atendimento humano pelo menos 1x
+let offeredHuman = new Set();
 
 
 client.on("ready", () => {
@@ -30,9 +36,9 @@ client.on("ready", () => {
 });
 
 
-// =====================
-// GITHUB
-// =====================
+// =============================
+// ATUALIZAR GITHUB GIST
+// =============================
 
 async function updateGist(texto) {
   await axios.patch(
@@ -53,9 +59,9 @@ async function updateGist(texto) {
 }
 
 
-// =====================
-// IA COM MEMORIA
-// =====================
+// =============================
+// IA COM MEMÓRIA
+// =============================
 
 async function aiChat(userId, texto) {
 
@@ -73,27 +79,34 @@ async function aiChat(userId, texto) {
       content: `
 Você é Js Studios BOT.
 
-INFORMAÇÕES:
+INFORMAÇÕES IMPORTANTES:
 
 - Você é uma inteligência artificial de suporte.
-- Você pertence ao servidor Js Studios Productions.
-- Seu objetivo é ajudar as pessoas do servidor.
-- Você é formal.
-- Não usa emojis.
-- Não demonstra emoções.
-- Não faz piadas.
-- Não fala sobre amizade.
-- Não fala coisas pessoais.
-- Não inventa informações.
-- Não pede para mencionar administradores.
+- Você pertence a um servidor do Discord.
+- O servidor pertence a um grupo do Roblox chamado Js Studios Productions.
+- O grupo produz jogos no Roblox.
+- Seu objetivo é auxiliar jogadores.
+
+COMPORTAMENTO:
+
+- Seja formal.
+- Não use emojis.
+- Não demonstre emoções.
+- Não faça piadas.
+- Não fale sobre amizade.
+- Não invente informações.
+- Não fale coisas pessoais.
+- Não peça para mencionar administradores.
+
+PROPÓSITO:
 
 Se perguntarem seu propósito:
-Responda: ajudar as pessoas do servidor.
+Responda: ajudar os jogadores do servidor.
 
 TRANSFERÊNCIA:
 
-Se o usuário pedir administrador, suporte humano, moderador ou ajuda real,
-no FINAL da resposta escreva: [TRANSFERIR]
+Se o usuário pedir administrador, humano, suporte humano ou algo do tipo,
+no FINAL escreva: [TRANSFERIR]
 
 Caso contrário, nunca escreva isso.
 `
@@ -122,16 +135,16 @@ Caso contrário, nunca escreva isso.
 
   history.push({ role: "assistant", content: reply });
 
-  // Limitar memória
+  // limitar memória
   if (history.length > 20) history.shift();
 
   return reply;
 }
 
 
-// =====================
-// MENSAGEM
-// =====================
+// =============================
+// EVENTO MENSAGEM
+// =============================
 
 client.on("messageCreate", async (message) => {
 
@@ -142,56 +155,57 @@ client.on("messageCreate", async (message) => {
   const userId = message.author.id;
 
 
-  // =====================
-  // ADMIN /close
-  // =====================
+  // =============================
+  // ADMIN COMANDOS
+  // =============================
 
-  if (message.author.id === ADMIN_ID && content === "/close") {
+  if (userId === ADMIN_ID) {
 
-    const currentUser = [...activeChats.keys()][0];
+    // ADMIN RESPONDER USUARIO
+    if (content.startsWith("/ms ")) {
 
-    if (!currentUser) {
-      return message.reply("Nenhum atendimento ativo.");
+      if (!currentUserId) {
+        return message.reply("Nenhum usuario em atendimento.");
+      }
+
+      const texto = content.slice(4);
+
+      const user = await client.users.fetch(currentUserId);
+
+      await user.send(texto);
+
+      return;
     }
 
-    const user = await client.users.fetch(currentUser);
+    // ADMIN ENCERRAR
+    if (content === "/close") {
 
-    await user.send("Atendimento encerrado.");
+      if (!currentUserId) {
+        return message.reply("Nenhum atendimento ativo.");
+      }
 
-    activeChats.delete(currentUser);
-    chatMemory.delete(currentUser);
+      const user = await client.users.fetch(currentUserId);
 
-    return message.reply("Atendimento fechado.");
-  }
+      await user.send("Atendimento encerrado.");
 
+      chatMemory.delete(currentUserId);
+      offeredHuman.delete(currentUserId);
+      currentUserId = null;
 
-  // =====================
-  // ADMIN RESPONDE
-  // =====================
-
-  if (message.author.id === ADMIN_ID && content.startsWith("/ms ")) {
-
-    const texto = content.slice(4);
-
-    const currentUser = [...activeChats.keys()][0];
-
-    if (!currentUser) {
-      return message.reply("Nenhum usuario em atendimento.");
+      return message.reply("Atendimento fechado.");
     }
 
-    const user = await client.users.fetch(currentUser);
-
-    await user.send(texto);
-
+    // IMPORTANTE:
+    // Admin não passa pela IA
     return;
   }
 
 
-  // =====================
-  // USUARIO EM CHAT COM ADMIN
-  // =====================
+  // =============================
+  // USUARIO FALANDO COM ADMIN
+  // =============================
 
-  if (activeChats.has(userId)) {
+  if (currentUserId === userId) {
 
     const admin = await client.users.fetch(ADMIN_ID);
 
@@ -201,9 +215,9 @@ client.on("messageCreate", async (message) => {
   }
 
 
-  // =====================
+  // =============================
   // COMANDO /set
-  // =====================
+  // =============================
 
   if (content.startsWith("/set ")) {
 
@@ -218,7 +232,7 @@ client.on("messageCreate", async (message) => {
       await updateGist(texto);
 
       setTimeout(() => {
-        message.reply("Texto alterado com sucesso.");
+        message.reply("Texto apareceu com sucesso.");
       }, 4000);
 
     } catch {
@@ -231,34 +245,45 @@ client.on("messageCreate", async (message) => {
   }
 
 
-  // =====================
-  // IA
-  // =====================
+  // =============================
+  // IA RESPONDENDO
+  // =============================
 
-  const reply = await aiChat(userId, content);
+  const aiReply = await aiChat(userId, content);
 
-  const transfer = reply.includes("[TRANSFERIR]");
-  const clean = reply.replace("[TRANSFERIR]", "");
+  const transfer = aiReply.includes("[TRANSFERIR]");
+  let clean = aiReply.replace("[TRANSFERIR]", "");
+
+
+  // Oferecer atendimento humano pelo menos uma vez
+  if (!offeredHuman.has(userId)) {
+
+    clean +=
+      "\n\nVocê quer que eu te transfira para o atendimento humano?";
+
+    offeredHuman.add(userId);
+  }
+
 
   await message.reply(clean);
 
 
-  // =====================
-  // TRANSFERIR
-  // =====================
+  // =============================
+  // TRANSFERIR PARA ADMIN
+  // =============================
 
   if (transfer) {
 
-    activeChats.set(userId, true);
+    currentUserId = userId;
 
     const admin = await client.users.fetch(ADMIN_ID);
 
     await message.reply(
-      "Vou transferir você para o ADMINISTRADOR. A partir de agora você está falando com o administrador. Para enviar uma mensagem, comece com /ms"
+      "Vou transferir você para o ADMINISTRADOR. A partir de agora você esta falando com o administrador. Para enviar uma mensagem, comece com /ms"
     );
 
     await admin.send(
-      `-----a partir de agora você está em um CHAT com ${message.author.tag}-----`
+      `-----a partir de agora voce esta em um CHAT com ${message.author.tag}-----`
     );
 
   }

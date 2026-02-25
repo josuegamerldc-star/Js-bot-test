@@ -8,6 +8,8 @@ const GIST_ID = process.env.GIST_ID;
 const GROQ_KEY = process.env.GROQ_KEY;
 const ADMIN_ID = process.env.ADMIN_ID;
 
+const RAW_URL = `https://gist.githubusercontent.com/${process.env.GITHUB_USER}/${GIST_ID}/raw/mensagem.txt`;
+
 const client = new Client({
   intents: [
     GatewayIntentBits.DirectMessages,
@@ -18,17 +20,12 @@ const client = new Client({
 
 
 // =============================
-// SISTEMA DE CHAT
+// SISTEMAS
 // =============================
 
-// Usuário atualmente em atendimento humano
 let currentUserId = null;
-
-// Memória da IA por usuário
 let chatMemory = new Map();
-
-// Controle para oferecer atendimento humano pelo menos 1x
-let offeredHuman = new Set();
+let messageCount = new Map(); // contar msgs antes de oferecer humano
 
 
 client.on("ready", () => {
@@ -37,7 +34,7 @@ client.on("ready", () => {
 
 
 // =============================
-// ATUALIZAR GITHUB GIST
+// GITHUB UPDATE
 // =============================
 
 async function updateGist(texto) {
@@ -59,6 +56,26 @@ async function updateGist(texto) {
 }
 
 
+// verificar se atualizou
+async function waitForUpdate(texto) {
+
+  while (true) {
+
+    try {
+
+      const res = await axios.get(RAW_URL);
+
+      if (res.data.trim() === texto.trim()) {
+        return true;
+      }
+
+    } catch {}
+
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+
 // =============================
 // IA COM MEMÓRIA
 // =============================
@@ -69,9 +86,18 @@ async function aiChat(userId, texto) {
     chatMemory.set(userId, []);
   }
 
+  if (!messageCount.has(userId)) {
+    messageCount.set(userId, 0);
+  }
+
+  messageCount.set(userId, messageCount.get(userId) + 1);
+
   const history = chatMemory.get(userId);
 
   history.push({ role: "user", content: texto });
+
+  // limitar memória
+  if (history.length > 12) history.shift();
 
   const messages = [
     {
@@ -79,10 +105,9 @@ async function aiChat(userId, texto) {
       content: `
 Você é Js Studios BOT.
 
-INFORMAÇÕES IMPORTANTES:
+INFORMAÇÕES:
 
-- Você é uma inteligência artificial de suporte.
-- Você pertence a um servidor do Discord.
+- Você é uma IA de suporte de um servidor Discord.
 - O servidor pertence a um grupo do Roblox chamado Js Studios Productions.
 - O grupo produz jogos no Roblox.
 - Seu objetivo é auxiliar jogadores.
@@ -96,19 +121,13 @@ COMPORTAMENTO:
 - Não fale sobre amizade.
 - Não invente informações.
 - Não fale coisas pessoais.
-- Não peça para mencionar administradores.
-
-PROPÓSITO:
-
-Se perguntarem seu propósito:
-Responda: ajudar os jogadores do servidor.
 
 TRANSFERÊNCIA:
 
-Se o usuário pedir administrador, humano, suporte humano ou algo do tipo,
+Se o usuário pedir administrador, humano ou ajuda real,
 no FINAL escreva: [TRANSFERIR]
 
-Caso contrário, nunca escreva isso.
+Caso contrário nunca escreva isso.
 `
     },
     ...history
@@ -135,9 +154,6 @@ Caso contrário, nunca escreva isso.
 
   history.push({ role: "assistant", content: reply });
 
-  // limitar memória
-  if (history.length > 20) history.shift();
-
   return reply;
 }
 
@@ -161,7 +177,36 @@ client.on("messageCreate", async (message) => {
 
   if (userId === ADMIN_ID) {
 
-    // ADMIN RESPONDER USUARIO
+    // /set
+    if (content.startsWith("/set ")) {
+
+      const texto = content.slice(5);
+
+      await message.reply(
+        "Seu pedido de mensagem foi aceito, espere um pouco e sua mensagem será exibida!"
+      );
+
+      try {
+
+        await updateGist(texto);
+
+        await waitForUpdate(texto);
+
+        await message.reply(
+          "sua mensagem foi exibida com sucesso!"
+        );
+
+      } catch {
+
+        await message.reply("Erro ao atualizar mensagem.");
+
+      }
+
+      return;
+    }
+
+
+    // responder usuário
     if (content.startsWith("/ms ")) {
 
       if (!currentUserId) {
@@ -177,7 +222,8 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // ADMIN ENCERRAR
+
+    // fechar
     if (content === "/close") {
 
       if (!currentUserId) {
@@ -189,20 +235,19 @@ client.on("messageCreate", async (message) => {
       await user.send("Atendimento encerrado.");
 
       chatMemory.delete(currentUserId);
-      offeredHuman.delete(currentUserId);
+      messageCount.delete(currentUserId);
+
       currentUserId = null;
 
       return message.reply("Atendimento fechado.");
     }
 
-    // IMPORTANTE:
-    // Admin não passa pela IA
-    return;
+    return; // admin nunca passa pela IA
   }
 
 
   // =============================
-  // USUARIO FALANDO COM ADMIN
+  // USUARIO EM CHAT COM ADMIN
   // =============================
 
   if (currentUserId === userId) {
@@ -216,37 +261,7 @@ client.on("messageCreate", async (message) => {
 
 
   // =============================
-  // COMANDO /set
-  // =============================
-
-  if (content.startsWith("/set ")) {
-
-    const texto = content.slice(5);
-
-    await message.reply(
-      "Pedido feito, seu texto aparecera em breve."
-    );
-
-    try {
-
-      await updateGist(texto);
-
-      setTimeout(() => {
-        message.reply("Texto apareceu com sucesso.");
-      }, 4000);
-
-    } catch {
-
-      await message.reply("Erro ao alterar texto.");
-
-    }
-
-    return;
-  }
-
-
-  // =============================
-  // IA RESPONDENDO
+  // IA
   // =============================
 
   const aiReply = await aiChat(userId, content);
@@ -255,13 +270,10 @@ client.on("messageCreate", async (message) => {
   let clean = aiReply.replace("[TRANSFERIR]", "");
 
 
-  // Oferecer atendimento humano pelo menos uma vez
-  if (!offeredHuman.has(userId)) {
+  // oferecer humano só depois de 3 msgs
+  if (messageCount.get(userId) >= 3 && !transfer) {
 
-    clean +=
-      "\n\nVocê quer que eu te transfira para o atendimento humano?";
-
-    offeredHuman.add(userId);
+    clean += "\n\nCaso precise, posso transferir você para atendimento humano.";
   }
 
 
@@ -269,7 +281,7 @@ client.on("messageCreate", async (message) => {
 
 
   // =============================
-  // TRANSFERIR PARA ADMIN
+  // TRANSFERIR
   // =============================
 
   if (transfer) {
@@ -279,7 +291,7 @@ client.on("messageCreate", async (message) => {
     const admin = await client.users.fetch(ADMIN_ID);
 
     await message.reply(
-      "Vou transferir você para o ADMINISTRADOR. A partir de agora você esta falando com o administrador. Para enviar uma mensagem, comece com /ms"
+      "Vou transferir você para o ADMINISTRADOR. A partir de agora voce esta falando com o administrador. Para enviar mensagem, comece com /ms"
     );
 
     await admin.send(

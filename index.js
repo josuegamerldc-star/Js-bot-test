@@ -8,8 +8,6 @@ const GIST_ID = process.env.GIST_ID;
 const GROQ_KEY = process.env.GROQ_KEY;
 const ADMIN_ID = process.env.ADMIN_ID;
 
-const RAW_URL = `https://gist.githubusercontent.com/${process.env.GITHUB_USER}/${GIST_ID}/raw/mensagem.txt`;
-
 const client = new Client({
   intents: [
     GatewayIntentBits.DirectMessages,
@@ -25,7 +23,7 @@ const client = new Client({
 
 let currentUserId = null;
 let chatMemory = new Map();
-let messageCount = new Map(); // contar msgs antes de oferecer humano
+let messageCount = new Map();
 
 
 client.on("ready", () => {
@@ -34,15 +32,16 @@ client.on("ready", () => {
 
 
 // =============================
-// GITHUB UPDATE
+// ATUALIZAR GITHUB (SEU MÉTODO)
 // =============================
 
 async function updateGist(texto) {
+
   await axios.patch(
     `https://api.github.com/gists/${GIST_ID}`,
     {
       files: {
-        "mensagem.txt": {
+        "gistfile1.txt": {
           content: texto
         }
       }
@@ -53,26 +52,7 @@ async function updateGist(texto) {
       }
     }
   );
-}
 
-
-// verificar se atualizou
-async function waitForUpdate(texto) {
-
-  while (true) {
-
-    try {
-
-      const res = await axios.get(RAW_URL);
-
-      if (res.data.trim() === texto.trim()) {
-        return true;
-      }
-
-    } catch {}
-
-    await new Promise(r => setTimeout(r, 3000));
-  }
 }
 
 
@@ -96,7 +76,6 @@ async function aiChat(userId, texto) {
 
   history.push({ role: "user", content: texto });
 
-  // limitar memória
   if (history.length > 12) history.shift();
 
   const messages = [
@@ -172,33 +151,29 @@ client.on("messageCreate", async (message) => {
 
 
   // =============================
-  // ADMIN COMANDOS
+  // ADMIN
   // =============================
 
   if (userId === ADMIN_ID) {
 
-    // /set
+    // =============================
+    // /set (MUDAR GITHUB)
+    // =============================
     if (content.startsWith("/set ")) {
 
       const texto = content.slice(5);
-
-      await message.reply(
-        "Seu pedido de mensagem foi aceito, espere um pouco e sua mensagem será exibida!"
-      );
 
       try {
 
         await updateGist(texto);
 
-        await waitForUpdate(texto);
+        await message.reply("sucesso");
 
-        await message.reply(
-          "sua mensagem foi exibida com sucesso!"
-        );
+      } catch (err) {
 
-      } catch {
+        console.error(err.response?.data || err.message);
 
-        await message.reply("Erro ao atualizar mensagem.");
+        await message.reply("falha");
 
       }
 
@@ -206,7 +181,9 @@ client.on("messageCreate", async (message) => {
     }
 
 
-    // responder usuário
+    // =============================
+    // RESPONDER USUARIO
+    // =============================
     if (content.startsWith("/ms ")) {
 
       if (!currentUserId) {
@@ -223,7 +200,9 @@ client.on("messageCreate", async (message) => {
     }
 
 
-    // fechar
+    // =============================
+    // FECHAR
+    // =============================
     if (content === "/close") {
 
       if (!currentUserId) {
@@ -242,7 +221,7 @@ client.on("messageCreate", async (message) => {
       return message.reply("Atendimento fechado.");
     }
 
-    return; // admin nunca passa pela IA
+    return;
   }
 
 
@@ -270,12 +249,9 @@ client.on("messageCreate", async (message) => {
   let clean = aiReply.replace("[TRANSFERIR]", "");
 
 
-  // oferecer humano só depois de 3 msgs
   if (messageCount.get(userId) >= 3 && !transfer) {
-
     clean += "\n\nCaso precise, posso transferir você para atendimento humano.";
   }
-
 
   await message.reply(clean);
 

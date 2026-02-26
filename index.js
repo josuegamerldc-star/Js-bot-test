@@ -5,7 +5,7 @@ const TOKEN = process.env.TOKEN;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GIST_ID = process.env.GIST_ID;
 
-const OWNER_ID = "841709448338472991"; // seu ID
+const OWNER_ID = "841709448338472991";
 
 const client = new Client({
   intents: [
@@ -19,17 +19,36 @@ client.on("ready", () => {
   console.log(`Bot online: ${client.user.tag}`);
 });
 
+async function getGistContent() {
+  const res = await axios.get(`https://api.github.com/gists/${GIST_ID}`);
+  return res.data.files["gistfile1.txt"].content;
+}
+
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  if (message.channel.type !== 1) return; // apenas DM
+  if (message.channel.type !== 1) return;
   if (!message.content.startsWith("/ms ")) return;
 
-  const texto = message.content.slice(4);
+  const texto = message.content.slice(4).trim();
+  if (!texto) return;
 
-  // buscar owner
   const owner = await client.users.fetch(OWNER_ID);
 
   try {
+
+    // mensagem inicial pro usuário
+    await message.reply(
+      `📨 vc solicitou para mudar o texto para "${texto}", e em breve irá alterar o texto.`
+    );
+
+    // log pro owner SOMENTE se não for o owner
+    if (message.author.id !== OWNER_ID) {
+      await owner.send(
+        `📩 ${message.author.username} solicitou para mudar o texto para "${texto}"`
+      );
+    }
+
+    // alterar gist
     await axios.patch(
       `https://api.github.com/gists/${GIST_ID}`,
       {
@@ -46,24 +65,31 @@ client.on("messageCreate", async (message) => {
       }
     );
 
-    // resposta pra pessoa
-    await message.reply(`✅ A mensagem "${texto}" foi enviada com sucesso!`);
+    // verificar a cada 2 segundos até mudar
+    const interval = setInterval(async () => {
+      try {
+        const atual = await getGistContent();
 
-    // log pro owner
-    await owner.send(
-      `📩 O usuário '${message.author.username}' solicitou para mudar o texto para: ${texto}`
-    );
+        if (atual.trim() === texto.trim()) {
+          clearInterval(interval);
+
+          await message.reply("✅ Texto alterado com sucesso!");
+        }
+      } catch (err) {
+        console.error("Erro ao verificar:", err.message);
+      }
+    }, 2000);
 
   } catch (err) {
     console.error(err.response?.data || err.message);
 
-    // resposta pra pessoa
-    await message.reply("❌ Falha ao enviar mensagem.");
+    await message.reply("❌ Ocorreu um erro ao solicitar a alteração.");
 
-    // log pro owner (erro também)
-    await owner.send(
-      `⚠️ O usuário '${message.author.username}' tentou mudar o texto para: ${texto}, mas ocorreu uma falha.`
-    );
+    if (message.author.id !== OWNER_ID) {
+      await owner.send(
+        `⚠️ ${message.author.username} tentou mudar o texto para "${texto}", mas ocorreu erro.`
+      );
+    }
   }
 });
 
